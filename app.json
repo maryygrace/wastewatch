@@ -7,10 +7,9 @@
     "icon": "./assets/images/icon.png",
     "scheme": "wastewatch",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/splash.png",
-      "resizeMode": "cover",
+      "resizeMode": "contain",
       "backgroundColor": "#4CAF50"
     },
     "ios": {

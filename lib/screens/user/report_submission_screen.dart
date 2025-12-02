@@ -16,8 +16,10 @@ import '../../models/prediction_result.dart'; // <--- IMPORT THE NEW MODEL
 
 // Define waste categories as a top-level constant for better code organization.
 const List<String> _wasteCategories = [
-  'biodegradable',
-  'recyclable',
+  'plastic',
+  'glass',
+  'paper',
+  'metal',
   'residual',
 ];
 

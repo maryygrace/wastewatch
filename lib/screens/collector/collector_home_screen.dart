@@ -1,9 +1,15 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:wastewatch/services/supabase_service.dart';
 import 'collector_report_detail_screen.dart';
 import '../../theme_provider.dart';
+
+import '../../services/logging_service.dart';
 
 class CollectorHomeScreen extends StatefulWidget {
   const CollectorHomeScreen({super.key});
@@ -14,15 +20,31 @@ class CollectorHomeScreen extends StatefulWidget {
 
 class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
   int _selectedIndex = 0;
-  Map<String, dynamic>? _collectorData;
+  Map<String, dynamic>? _userData;
   bool _isLoading = true;
   String? _errorMessage;
 
+  // Stats
+  String _selectedFilter = 'in-progress';
+  int _resolvedToday = 0;
+  int _totalAssigned = 0;
+  int _totalResolved = 0;
+
+  // New state for leaderboard and map
+  List<Map<String, dynamic>> _leaderboard = [];
+  List<Map<String, dynamic>> _assignedReportsForMap = [];
+  String? _avatarUrl;
+
+  // For notifications
+  final List<Map<String, dynamic>> _notifications = [];
+  int _newNotificationCount = 0;
+  final MapController _mapController = MapController();
+
   static const List<String> _appBarTitles = <String>[
     'Dashboard',
-    'Assigned Reports',
-    'Resolved Reports',
-    'Profile'
+    'Reports',
+    'Notifications',
+    'Profile',
   ];
 
   @override
@@ -32,28 +54,106 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
   }
 
   Future<void> _loadCollectorData() async {
-    setState(() {
-      _isLoading = _collectorData == null;
-      _errorMessage = null;
-    });
+    if (!mounted) return;
+    setState(() => _isLoading = true);
 
     try {
       final user = SupabaseService.currentUser;
       if (user == null) throw Exception("User not found.");
 
-      final data = await SupabaseService.getUserData(user.id);
-      if (mounted) setState(() => _collectorData = data);
-    } catch (e) {
-      if (mounted) setState(() => _errorMessage = "Failed to load data.");
+      // Fetch data in parallel
+      final results = await Future.wait([
+        SupabaseService.getUserData(user.id),
+        SupabaseService.getCollectorStats(user.id),
+        SupabaseService.getCollectorLeaderboard(),
+        SupabaseService.getAssignedReportsForMap(user.id),
+        SupabaseService.getHistoricalAssignedNotifications(user.id),
+        SupabaseService.getNewAssignedNotifications(user.id),
+      ]);
+
+      final userData = results[0] as Map<String, dynamic>?;
+      final collectorStats = results[1] as Map<String, dynamic>;
+      final leaderboardData = results[2] as List<Map<String, dynamic>>;
+      final mapData = results[3] as List<Map<String, dynamic>>;
+      final historicalNotifications = results[4] as List<Map<String, dynamic>>;
+      final newNotifications = results[5] as List<Map<String, dynamic>>;
+      if (mounted) {
+        setState(() {
+          _userData = userData;
+          _avatarUrl = userData?['avatar_url'];
+          _resolvedToday = collectorStats['resolvedToday'] ?? 0;
+          _totalAssigned = collectorStats['totalAssigned'] ?? 0;
+          _totalResolved = collectorStats['totalResolved'] ?? 0;
+          _leaderboard = leaderboardData;
+          _assignedReportsForMap = mapData;
+
+          _notifications.clear();
+          _notifications.addAll(historicalNotifications);
+
+          if (newNotifications.isNotEmpty) {
+            _newNotificationCount = newNotifications.length;
+            // Prepend new notifications so they appear at the top
+            _notifications.insertAll(0, newNotifications);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text("You have ${newNotifications.length} new report(s) assigned."),
+                backgroundColor: Colors.blue,
+              ),
+            );
+          }
+        });
+      }
+    } catch (e, stackTrace) {
+      Log.e('Error loading collector data', e, stackTrace);
+      if (mounted) {
+        setState(() => _errorMessage = "Failed to load data: ${e.toString()}");
+      }
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
+      // If the user taps on the notifications tab (index 2), mark all as read.
+      if (index == 2) {
+        _newNotificationCount = 0;
+      }
     });
+  }
+
+  void _navigateToReportsTab(String filter) {
+    setState(() {
+      _selectedIndex = 1; // Index of the 'Reports' tab
+      _selectedFilter = filter;
+    });
+  }
+
+  Future<void> _onUploadAvatar(String filePath) async {
+    try {
+      final user = SupabaseService.currentUser;
+      if (user == null) {
+        throw Exception("User not found. Please log in again.");
+      }
+      final fileExt = filePath.split('.').last;
+      final fileName = '${user.id}/avatar.$fileExt';
+      await SupabaseService.uploadImageToStorage('avatars', fileName, File(filePath));
+      final publicAvatarUrl = SupabaseService.getPublicImageUrl(fileName);
+      await SupabaseService.updateUserProfile(user.id, {'avatar_url': publicAvatarUrl});
+      setState(() {
+        _avatarUrl = publicAvatarUrl;
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Updated profile picture!')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   @override
@@ -80,24 +180,22 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
 
     final List<Widget> widgetOptions = <Widget>[
       _buildDashboardTab(),
-      _buildReportsListTab(isAssigned: true),
-      _buildReportsListTab(isAssigned: false),
+      _buildReportsTab(),
+      _buildNotificationsTab(),
       _buildProfileTab(),
     ];
 
     
     return Scaffold(
       appBar: AppBar(        
-        title: _selectedIndex == 0
-            ? Text(
-                'WasteWatch',
-                style: GoogleFonts.poppins(
-                  color: Colors.green,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 22,
-                ),
-              )
-            : Text(_appBarTitles[_selectedIndex]),
+        title: _selectedIndex == 0 ? Text(
+          'WasteWatch',
+          style: GoogleFonts.poppins(
+            color: Colors.green,
+            fontWeight: FontWeight.w700,
+            fontSize: 22,
+          ),
+        ) : Text(_appBarTitles[_selectedIndex]),
         centerTitle: _selectedIndex == 0,
       ),
       body: IndexedStack(
@@ -106,11 +204,15 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
       ),
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
-        items: const <BottomNavigationBarItem>[
-          BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), activeIcon: Icon(Icons.dashboard), label: 'Dashboard'),
-          BottomNavigationBarItem(icon: Icon(Icons.assignment_late_outlined), activeIcon: Icon(Icons.assignment_late), label: 'Assigned'),
-          BottomNavigationBarItem(icon: Icon(Icons.assignment_turned_in_outlined), activeIcon: Icon(Icons.assignment_turned_in), label: 'Resolved'),
-          BottomNavigationBarItem(icon: Icon(Icons.person_outline), activeIcon: Icon(Icons.person), label: 'Profile'),
+        items: <BottomNavigationBarItem>[
+          const BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), activeIcon: Icon(Icons.dashboard), label: 'Dashboard'),
+          const BottomNavigationBarItem(icon: Icon(Icons.list_alt_outlined), activeIcon: Icon(Icons.list_alt), label: 'Reports'),
+          BottomNavigationBarItem(
+            icon: Badge(label: Text(_newNotificationCount.toString()), isLabelVisible: _newNotificationCount > 0, child: const Icon(Icons.notifications_outlined)),
+            activeIcon: Badge(label: Text(_newNotificationCount.toString()), isLabelVisible: _newNotificationCount > 0, child: const Icon(Icons.notifications)),
+            label: 'Notifications',
+          ),
+          const BottomNavigationBarItem(icon: Icon(Icons.person_outline), activeIcon: Icon(Icons.person), label: 'Profile'),
         ],
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
@@ -119,66 +221,75 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
   }
 
   Widget _buildDashboardTab() {
-    final collectorId = SupabaseService.currentUser?.id;
-    if (collectorId == null) return const Center(child: Text('User not found.'));
-
-    return FutureBuilder<Map<String, dynamic>>(
-      future: SupabaseService.getCollectorStats(collectorId),
-      builder: (context, snapshot) {
-        final resolvedToday = snapshot.data?['resolvedToday'] ?? 0;
-        final totalAssigned = snapshot.data?['totalAssigned'] ?? 0;
-        final collectorName = _collectorData?['full_name'] ?? 'Collector';
-        return RefreshIndicator(
-          onRefresh: _loadCollectorData,
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
+    final collectorName = _userData?['full_name'] ?? 'Collector';
+    return RefreshIndicator(
+      onRefresh: _loadCollectorData,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Welcome, $collectorName!',
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Here are your current stats:',
+              style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 24),
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Welcome, $collectorName!',
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  'Here are your current stats:',
-                  style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
-                ),
-                const SizedBox(height: 24),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded( // Wrap with GestureDetector to handle tap
-                      child: GestureDetector(
-                        onTap: () => _onItemTapped(1), // Navigate to "Assigned" tab (index 1)
-                        child: _buildStatCard(
-                          'Currently Assigned',
-                          totalAssigned.toString(),
-                          Colors.orange,
-                          Icons.assignment_late,
-                        ),
-                      ),
+                Expanded( // Wrap with GestureDetector to handle tap
+                  child: GestureDetector(
+                    onTap: () => _navigateToReportsTab('in-progress'),
+                    child: _buildStatCard(
+                      'Currently Assigned',
+                      _totalAssigned.toString(),
+                      Colors.orange,
+                      Icons.assignment_late,
                     ),
-                    const SizedBox(width: 16),
-                    Expanded( // Wrap with GestureDetector to handle tap
-                      child: GestureDetector(
-                        onTap: () => _onItemTapped(2), // Navigate to "Resolved" tab (index 2)
-                        child: _buildStatCard(
-                          'Resolved Today',
-                          resolvedToday.toString(),
-                          Colors.green,
-                          Icons.check_circle,
-                        ),
-                      ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded( // Wrap with GestureDetector to handle tap
+                  child: GestureDetector(
+                    onTap: () => _navigateToReportsTab('resolved'),
+                    child: _buildStatCard(
+                      'Resolved Today',
+                      _resolvedToday.toString(),
+                      Colors.green,
+                      Icons.check_circle,
                     ),
-                  ],
+                  ),
                 ),
               ],
             ),
-          ),
-        );
-      },
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: _buildStatCard(
+                'Total Resolved',
+                _totalResolved.toString(),
+                Colors.purple,
+                Icons.history,
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // NEW: Assigned Reports Map
+            _buildAssignedReportsMapCard(),
+            const SizedBox(height: 20),
+
+            // NEW: Leaderboard
+            _buildLeaderboardCard(),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
     );
   }
 
@@ -206,60 +317,225 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
     );
   }
 
-  Widget _buildReportsListTab({required bool isAssigned}) {
+  Widget _buildLeaderboardCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Collector Leaderboard',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 10),
+        Card(
+          elevation: 2,
+          child: _leaderboard.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Center(child: Text('No leaderboard data available.')),
+                )
+              : Column(
+                  children: _leaderboard.asMap().entries.map((entry) {
+                    int idx = entry.key;
+                    Map<String, dynamic> collector = entry.value;
+                    IconData medalIcon;
+                    Color medalColor;
+                    switch (idx) {
+                      case 0:
+                        medalIcon = Icons.emoji_events;
+                        medalColor = Colors.amber;
+                        break;
+                      case 1:
+                        medalIcon = Icons.emoji_events;
+                        medalColor = Colors.grey.shade400;
+                        break;
+                      case 2:
+                        medalIcon = Icons.emoji_events;
+                        medalColor = Colors.brown.shade400;
+                        break;
+                      default:
+                        medalIcon = Icons.military_tech;
+                        medalColor = Colors.transparent;
+                    }
+                    return ListTile(
+                      leading: Icon(medalIcon, color: medalColor),
+                      title: Text(
+                        collector['full_name'] ?? 'Unknown Collector',
+                        style: const TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      trailing: Text(
+                        '${collector['resolved_count']} reports',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAssignedReportsMapCard() {
+    final markers = _assignedReportsForMap.map((report) {
+      return Marker(
+        width: 80.0,
+        height: 80.0,
+        point: LatLng(report['latitude'], report['longitude']),
+        child: Tooltip(
+          message: report['title'] ?? 'Report',
+          child: const Icon(Icons.location_pin, color: Colors.red, size: 30),
+        ),
+      );
+    }).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Assigned Report Locations',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 250,
+          child: Card(
+            clipBehavior: Clip.antiAlias,
+            elevation: 2,
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: markers.isNotEmpty ? markers.first.point : const LatLng(10.8702, 122.9566),
+                initialZoom: 10.0,
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                ),
+                MarkerLayer(markers: markers),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildReportsTab() {
     final collectorId = SupabaseService.currentUser?.id;
     if (collectorId == null) return const Center(child: Text('User not found.'));
 
-    final stream = isAssigned
-        ? SupabaseService.getAssignedReportsStream(collectorId)
-        : SupabaseService.getResolvedReportsByCollectorStream(collectorId);
+    Stream<List<Map<String, dynamic>>> stream;
+    if (_selectedFilter == 'in-progress') {
+      stream = SupabaseService.getAssignedReportsStream(collectorId);
+    } else {
+      stream = SupabaseService.getResolvedReportsByCollectorStream(collectorId);
+    }
 
     return StreamBuilder<List<Map<String, dynamic>>>(
       stream: stream,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(child: Text('Error fetching reports: ${snapshot.error}'));
-        }
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(isAssigned ? Icons.task_alt : Icons.history, size: 64, color: Colors.grey),
-                const SizedBox(height: 16),
-                Text(
-                  isAssigned ? 'No assigned reports.' : 'No resolved reports yet.',
-                  style: const TextStyle(fontSize: 18, color: Colors.grey),
-                ),
-                if (isAssigned)
-                  const Text(
-                    'Great job!',
-                    style: TextStyle(color: Colors.grey),
-                  ),
-              ],
-            ),
-          );
-        }
+        return Column(
+          children: [
+            _buildFilterButtons(),
+            Expanded(child: _buildReportsList(snapshot)),
+          ],
+        );
+      },
+    );
+  }
 
-        final reports = snapshot.data!;
-        return ListView.builder(
-          padding: const EdgeInsets.all(16.0),
-          itemCount: reports.length,
-          itemBuilder: (context, index) {
-            final report = reports[index];
-            return GestureDetector(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (context) => CollectorReportDetailScreen(reportId: report['id'])),
-                );
-              },
-              child: _buildReportCard(report),
+  Widget _buildFilterButtons() {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: SegmentedButton<String>(
+        segments: const [
+          ButtonSegment(value: 'in-progress', label: Text('Assigned'), icon: Icon(Icons.assignment_late_outlined)),
+          ButtonSegment(value: 'resolved', label: Text('Resolved'), icon: Icon(Icons.assignment_turned_in_outlined)),
+        ],
+        selected: {_selectedFilter},
+        onSelectionChanged: (Set<String> newSelection) {
+          setState(() {
+            _selectedFilter = newSelection.first;
+          });
+        },
+      ),
+    );
+  }
+
+  Widget _buildReportsList(AsyncSnapshot<List<Map<String, dynamic>>> snapshot) {
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (snapshot.hasError) {
+      return Center(child: Text('Error fetching reports: ${snapshot.error}'));
+    }
+    if (!snapshot.hasData || snapshot.data!.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(_selectedFilter == 'in-progress' ? Icons.task_alt : Icons.history, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            Text(
+              _selectedFilter == 'in-progress' ? 'No assigned reports.' : 'No resolved reports yet.',
+              style: const TextStyle(fontSize: 18, color: Colors.grey),
+            ),
+            if (_selectedFilter == 'in-progress')
+              const Text(
+                'Great job!',
+                style: TextStyle(color: Colors.grey),
+              ),
+          ],
+        ),
+      );
+    }
+
+    final reports = snapshot.data!;
+    return ListView.builder(
+      padding: const EdgeInsets.all(16.0),
+      itemCount: reports.length,
+      itemBuilder: (context, index) {
+        final report = reports[index];
+        return GestureDetector(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => CollectorReportDetailScreen(reportId: report['id'])),
             );
+          },
+          child: _buildReportCard(report),
+        );
+      },
+    );
+  }
+  Widget _buildNotificationsTab() {
+    if (_notifications.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.notifications_off_outlined, size: 64, color: Colors.grey),
+            SizedBox(height: 16),
+            Text('You have no notifications.', style: TextStyle(fontSize: 18, color: Colors.grey)),
+          ],
+        ),
+      );
+    }
+    return ListView.builder(
+      itemCount: _notifications.length,
+      itemBuilder: (context, index) {
+        final notification = _notifications[index];
+        return ListTile(
+          leading: const Icon(Icons.assignment_ind_outlined, color: Colors.blue),
+          title: Text(notification['message']),
+          subtitle: Text(DateTime.parse(notification['timestamp']).toLocal().toString().split('.')[0]),
+          onTap: () {
+            final reportId = notification['reportId'];
+            if (reportId != null) {
+              Navigator.push(context, MaterialPageRoute(builder: (context) => CollectorReportDetailScreen(reportId: reportId)));
+            }
           },
         );
       },
@@ -268,8 +544,9 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
 
   Widget _buildProfileTab() {
     final themeProvider = Provider.of<ThemeProvider>(context);
-    final userEmail = _collectorData?['email'] ?? 'No email found';
-    final userName = _collectorData?['full_name'] ?? 'Collector';
+    final userEmail = _userData?['email'] ?? 'No email found';
+    final userName = _userData?['full_name'] ?? 'User';
+    final accountCreatedAt = _userData?['created_at'] != null ? DateTime.parse(_userData!['created_at']).toLocal().toString().split(' ')[0] : 'Unknown';
 
     return ListView(
       padding: const EdgeInsets.all(16.0),
@@ -278,21 +555,96 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
         Center(
           child: Column(
             children: [
-              CircleAvatar(
-                radius: 50,
-                backgroundColor: Colors.grey,
-                child: Icon(Icons.person, size: 50, color: Colors.white),
+              GestureDetector(
+                onTap: () async {
+                  final imagePicker = ImagePicker();
+                  final pickedFile = await imagePicker.pickImage(
+                    source: ImageSource.gallery,
+                    imageQuality: 50,
+                    maxWidth: 400,
+                  );
+                  if (pickedFile != null) {
+                    await _onUploadAvatar(pickedFile.path);
+                  }
+                },
+                child: Stack(
+                  children: [
+                    _avatarUrl == null || _avatarUrl!.isEmpty
+                        ? const CircleAvatar(
+                            radius: 50,
+                            backgroundColor: Colors.grey,
+                            child: Icon(Icons.person, size: 50, color: Colors.white),
+                          )
+                        : CircleAvatar(
+                            radius: 50,
+                            backgroundImage: NetworkImage(_avatarUrl!),
+                          ),
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).primaryColor,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Icon(
+                          Icons.edit,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
               Text(userName, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               const SizedBox(height: 4),
               Text(userEmail, style: TextStyle(fontSize: 16, color: Colors.grey.shade600)),
+              if (_userData?['location'] != null && _userData!['location'].isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.location_on_outlined, size: 16, color: Colors.grey.shade600),
+                    const SizedBox(width: 4),
+                    Text(_userData!['location'], style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
+                  ],
+                ),
+              ],
+              if (_userData?['bio'] != null && _userData!['bio'].isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(_userData!['bio'], style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic), textAlign: TextAlign.center),
+              ],
             ],
           ),
         ),
         const SizedBox(height: 24),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.edit),
+          label: const Text('Edit Profile'),
+          onPressed: () {
+            // Navigate to the edit profile screen
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => EditProfileScreen(
+                  userData: _userData,
+                  onProfileUpdated: (updatedData) {
+                    setState(() {
+                      _userData = updatedData;
+                    });
+                  },
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 16),
         const Divider(),
 
+        _buildSectionHeader('Preferences'),
         SwitchListTile(
           title: const Text('Dark Mode'),
           subtitle: const Text('Reduce eye strain in low light'),
@@ -304,11 +656,32 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
         ),
         const Divider(height: 32),
         ListTile(
+          leading: const Icon(Icons.account_circle),
+          title: const Text('Account Created'),
+          subtitle: Text(accountCreatedAt),
+        ),
+        const Divider(height: 32),
+        _buildSectionHeader('Account'),
+        ListTile(
           leading: const Icon(Icons.logout, color: Colors.red),
           title: const Text('Log Out', style: TextStyle(color: Colors.red)),
           onTap: () => _showLogoutConfirmationDialog(),
         ),
       ],
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      child: Text(
+        title.toUpperCase(),
+        style: TextStyle(
+          color: Theme.of(context).primaryColor,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1.2,
+        ),
+      ),
     );
   }
 
@@ -450,6 +823,122 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
           ],
         );
       },
+    );
+  }
+}
+
+class EditProfileScreen extends StatefulWidget {
+  final Map<String, dynamic>? userData;
+  final Function(Map<String, dynamic>) onProfileUpdated;
+
+  const EditProfileScreen({super.key, this.userData, required this.onProfileUpdated});
+
+  @override
+  State<EditProfileScreen> createState() => _EditProfileScreenState();
+}
+
+class _EditProfileScreenState extends State<EditProfileScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _fullNameController = TextEditingController();
+  final _bioController = TextEditingController();
+  final _locationController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _fullNameController.text = widget.userData?['full_name'] ?? '';
+    _bioController.text = widget.userData?['bio'] ?? '';
+    _locationController.text = widget.userData?['location'] ?? '';
+  }
+
+  @override
+  void dispose() {
+    _fullNameController.dispose();
+    _bioController.dispose();
+    _locationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _updateProfile() async {
+    if (_formKey.currentState!.validate()) {
+      final fullName = _fullNameController.text.trim();
+      final userId = SupabaseService.currentUser?.id;
+      final bio = _bioController.text.trim();
+      final location = _locationController.text.trim();
+
+      if (userId != null) {
+        try {
+          final updates = {
+            'full_name': fullName,
+            'bio': bio,
+            'location': location,
+          };
+
+          await SupabaseService.updateUserProfile(userId, updates);
+
+          // Optimistically update the local state
+          final updatedUserData = Map<String, dynamic>.from(widget.userData ?? {});
+          updatedUserData['full_name'] = fullName;
+          updatedUserData['bio'] = bio;
+          updatedUserData['location'] = location;
+          widget.onProfileUpdated(updatedUserData);
+
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Profile updated successfully!')),
+          );
+          Navigator.pop(context); // Close the edit screen
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to update profile. Error: ${e.toString()}')),
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Edit Profile'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              TextFormField(
+                controller: _fullNameController,
+                decoration: const InputDecoration(
+                  labelText: 'Full Name',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter your full name';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _bioController,
+                decoration: const InputDecoration(labelText: 'Bio', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _locationController,
+                decoration: const InputDecoration(labelText: 'Location', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(onPressed: _updateProfile, child: const Text('Update Profile')),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

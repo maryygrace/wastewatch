@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/supabase_service.dart';
@@ -7,6 +10,7 @@ import '../../services/logging_service.dart';
 import '../../theme_provider.dart';
 import 'report_submission_screen.dart';
 import 'user_report_detail_screen.dart';
+import 'all_locations_screen.dart';
 
 class UserHomeScreen extends StatefulWidget {
   const UserHomeScreen({super.key});
@@ -24,22 +28,30 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
   // Statistics data
   int _totalReports = 0;
   int _resolvedReports = 0;
-  Map<String, int> _wasteBreakdown = {
-    'biodegradable': 0,
-    'recyclable': 0,
-    'residual': 0,
-  };
   // Separate state for location breakdown to resolve type mismatch
   Map<String, int> _locationBreakdown = {};
+
+  // NEW: Global statistics data
+  int _globalTotalReports = 0;
+  Map<String, int> _globalWasteBreakdown = {
+    'plastic': 0,
+    'glass': 0,
+    'paper': 0,
+    'metal': 0,
+    'residual': 0,
+  };
 
   // For notifications
   final List<Map<String, dynamic>> _notifications = [];
   int _newNotificationCount = 0;
 
+  String? _avatarUrl;
   // Define colors for waste categories
   final Map<String, Color> _categoryColors = {
-    'biodegradable': Colors.green,
-    'recyclable': Colors.blue,
+    'plastic': Colors.blue,
+    'glass': Colors.cyan,
+    'paper': Colors.brown,
+    'metal': Colors.grey,
     'residual': Colors.orange,
   };
 
@@ -78,6 +90,7 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
         SupabaseService.calculateUserStats(user.id), // Now calculates stats directly
         SupabaseService.getHistoricalNotifications(user.id),
         _getNewNotifications(user.id),
+        SupabaseService.getGlobalStats(), // Fetch global stats
       ]);
 
       if (!mounted) return;
@@ -86,6 +99,7 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
       final userStats = results[1] as Map<String, dynamic>; // This is now non-nullable
       final historicalNotifications = results[2] as List<Map<String, dynamic>>;
       final newNotifications = results[3] as List<Map<String, dynamic>>?;
+      final globalStats = results[4] as Map<String, dynamic>;
 
       // User data is critical. If it's null, we can't proceed.
       if (userData == null) {
@@ -98,10 +112,16 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
         // Stats are now calculated directly, ensuring they are always available.
         _totalReports = userStats['totalReports'] ?? 0;
         _resolvedReports = userStats['resolvedReports'] ?? 0;
-        _wasteBreakdown = {
-          'biodegradable': userStats['biodegradable'] ?? 0,
-          'recyclable': userStats['recyclable'] ?? 0,
-          'residual': userStats['residual'] ?? 0,
+
+        _avatarUrl = userData['avatar_url'];
+        // Set global stats
+        _globalTotalReports = globalStats['totalReports'] ?? 0;
+        _globalWasteBreakdown = {
+          'plastic': globalStats['plastic'] ?? 0,
+          'glass': globalStats['glass'] ?? 0,
+          'paper': globalStats['paper'] ?? 0,
+          'metal': globalStats['metal'] ?? 0,
+          'residual': globalStats['residual'] ?? 0,
         };
 
         // Add all historical notifications first
@@ -110,7 +130,8 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
         // Prepend new notifications so they appear at the top of the list.
         _notifications.insertAll(0, newNotifications ?? []);
 
-        _locationBreakdown = Map<String, int>.from(userStats['locationBreakdown'] ?? {});
+
+        _locationBreakdown = Map<String, int>.from(globalStats['locationBreakdown'] ?? {});
 
         if (newNotifications != null && newNotifications.isNotEmpty) {
           // Set the badge count and show a snackbar for the newest notification.
@@ -133,6 +154,30 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
       if (mounted) {
         _isLoading = false;
       }
+    }
+  }
+
+  Future<void> _onUploadAvatar(String filePath) async {
+    try {
+      final user = SupabaseService.currentUser;
+      if (user == null) {
+        throw Exception("User not found. Please log in again.");
+      }
+      final fileExt = filePath.split('.').last;
+      final fileName = '${user.id}/avatar.$fileExt';
+      await SupabaseService.uploadImageToStorage('avatars', fileName, File(filePath));
+      final publicAvatarUrl = SupabaseService.getPublicImageUrl(fileName);
+      await SupabaseService.updateUserProfile(user.id, {'avatar_url': publicAvatarUrl});
+      setState(() {
+        _avatarUrl = publicAvatarUrl;
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Updated profile picture!')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
     }
   }
 
@@ -311,20 +356,29 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
 
             // Waste breakdown
             const Text(
-              'Waste Breakdown',
+              'Community Waste Breakdown', // Changed title to reflect global data
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
-            _buildWasteBreakdownChart(),
+            _buildGlobalWasteBreakdownChart(), // Display global breakdown here
             const SizedBox(height: 20),
 
             // Reports by Location
             const Text(
-              'Reports by Location',
+              'Top Report Locations',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
             _buildLocationBreakdownCard(),
+            const SizedBox(height: 20),
+
+            // NEW: Community Impact Section
+            const Text(
+              'Community Impact',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            _buildGlobalStatsCard(),
             const SizedBox(height: 20),
 
           ],
@@ -371,31 +425,6 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
     );
   }
 
-  Widget _buildWasteBreakdownChart() {
-    return Card(
-      elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: _wasteBreakdown.entries.map((entry) {
-            String category = entry.key;
-            int count = entry.value;
-            Color color = _categoryColors[category] ?? Colors.grey;
-
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5.0),
-              child: _buildWasteCategoryRow(
-                category.replaceFirst(category[0], category[0].toUpperCase()),
-                count,
-                color,
-              ),
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
-
   Widget _buildWasteCategoryRow(String category, int count, Color color) {
     return Row(
       children: [
@@ -426,6 +455,64 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
     );
   }
 
+  Widget _buildGlobalStatsCard() {
+    return Card(
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Together, we\'ve submitted:',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            Center(
+              child: Text(
+                '$_globalTotalReports Reports',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(context).primaryColor,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGlobalWasteBreakdownChart() {
+    // Show a message if there's no data yet.
+    final totalGlobalWaste = _globalWasteBreakdown.values.reduce((a, b) => a + b);
+    if (totalGlobalWaste == 0) {
+      return const Card(
+        elevation: 3,
+        child: Padding(
+          padding: EdgeInsets.all(16.0),
+          child: Center(child: Text('Community waste data is not yet available.', style: TextStyle(color: Colors.grey))),
+        ),
+      );
+    }
+
+    return Card(
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: _globalWasteBreakdown.entries.map((entry) {
+            final category = entry.key;
+            final count = entry.value;
+            final color = _categoryColors[category] ?? Colors.grey;
+            return _buildWasteCategoryRow(category[0].toUpperCase() + category.substring(1), count, color);
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
   Widget _buildLocationBreakdownCard() {
     // Sort locations by report count, descending, and take the top 5
     final sortedLocations = _locationBreakdown.entries.toList()
@@ -445,19 +532,32 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
     // The highest count will represent 100% of the progress bar width
     final maxCount = topLocations.first.value;
 
-    return Card(
-      elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: List.generate(topLocations.length, (index) {
-            final entry = topLocations[index];
-            final locationName = _getShortLocationName(entry.key);
-            final count = entry.value;
-            final percentage = maxCount > 0 ? count / maxCount : 0.0;
-
-            return _buildLocationBar(context, locationName, count, percentage);
-          }),
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => AllLocationsScreen(allLocations: _locationBreakdown),
+          ),
+        );
+      },
+      child: Card(
+        elevation: 3,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            children: [
+              ...List.generate(topLocations.length, (index) {
+                final entry = topLocations[index];
+                final locationName = _getShortLocationName(entry.key);
+                final count = entry.value;
+                final percentage = maxCount > 0 ? count / maxCount : 0.0;
+                return _buildLocationBar(context, locationName, count, percentage);
+              }),
+              const SizedBox(height: 8),
+              Text('Tap to see all locations...', style: TextStyle(color: Theme.of(context).primaryColor)),
+            ],
+          ),
         ),
       ),
     );
@@ -659,11 +759,14 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  data['title'] ?? 'Untitled Report',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+                Flexible(
+                  child: Text(
+                    data['title'] ?? 'Untitled Report',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    overflow: TextOverflow.ellipsis, // Prevent long titles from overflowing
                   ),
                 ),
                 Container(
@@ -690,9 +793,11 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
               children: [
                 Icon(Icons.category, size: 16, color: Colors.grey.shade600),
                 const SizedBox(width: 4),
-                Text(
-                  data['wasteCategory']?.toString().toUpperCase() ?? 'UNCATEGORIZED',
-                  style: TextStyle(color: Colors.grey.shade600),
+                Flexible(
+                  child: Text(
+                    data['wasteCategory']?.toString().toUpperCase() ?? 'UNCATEGORIZED',
+                    style: TextStyle(color: Colors.grey.shade600),
+                  ),
                 ),
                 const SizedBox(width: 16),
                 Icon(Icons.calendar_today, size: 16, color: Colors.grey.shade600),
@@ -745,6 +850,7 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
     final themeProvider = Provider.of<ThemeProvider>(context);
     final userEmail = _userData?['email'] ?? 'No email found';
     final userName = _userData?['full_name'] ?? 'User';
+    final accountCreatedAt = _userData?['created_at'] != null ? DateTime.parse(_userData!['created_at']).toLocal().toString().split(' ')[0] : 'Unknown';
 
     return ListView(
       padding: const EdgeInsets.all(16.0),
@@ -753,19 +859,103 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
         Center(
           child: Column(
             children: [
-              const CircleAvatar(
-                radius: 50,
-                backgroundColor: Colors.grey,
-                child: Icon(Icons.person, size: 50, color: Colors.white),
+              GestureDetector(
+                onTap: () async {
+                  final imagePicker = ImagePicker();
+                  final pickedFile = await imagePicker.pickImage(
+                    source: ImageSource.gallery,
+                    imageQuality: 50,
+                    maxWidth: 400,
+                  );
+                  if (pickedFile != null) {
+                    await _onUploadAvatar(pickedFile.path);
+                  }
+                },
+                child: Stack(
+                  children: [
+                    _avatarUrl == null || _avatarUrl!.isEmpty
+                        ? CircleAvatar(
+                            radius: 50,
+                            backgroundColor: Colors.grey,
+                            child: Icon(Icons.person, size: 50, color: Colors.white),
+                          )
+                        : CircleAvatar(
+                            radius: 50,
+                            backgroundImage: NetworkImage(_avatarUrl!),
+                          ),
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).primaryColor,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Icon(
+                          Icons.edit,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
+
+
+
+
+
+
+
               Text(userName, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               const SizedBox(height: 4),
               Text(userEmail, style: TextStyle(fontSize: 16, color: Colors.grey.shade600)),
+              if (_userData?['location'] != null && _userData!['location'].isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.location_on_outlined, size: 16, color: Colors.grey.shade600),
+                    const SizedBox(width: 4),
+                    Text(_userData!['location'], style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
+                  ],
+                ),
+              ],
+              if (_userData?['bio'] != null && _userData!['bio'].isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(_userData!['bio'], style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic), textAlign: TextAlign.center),
+              ],
             ],
           ),
         ),
         const SizedBox(height: 24),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.edit),
+          label: const Text('Edit Profile'),
+          onPressed: () {
+
+            // Navigate to the edit profile screen
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => EditProfileScreen(
+                  userData: _userData,
+                  onProfileUpdated: (updatedData) {
+
+                    setState(() {
+                      _userData = updatedData;
+                    });
+                  },
+                ),
+              ),
+            );
+          },
+        ),
+
+        const SizedBox(height: 16),
         const Divider(),
 
         // Re-using settings screen content
@@ -778,6 +968,12 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
             themeProvider.toggleTheme(value);
           },
           secondary: const Icon(Icons.dark_mode_outlined),
+        ),
+        const Divider(height: 32),
+        ListTile(
+          leading: const Icon(Icons.account_circle),
+          title: const Text('Account Created'),
+          subtitle: Text(accountCreatedAt),
         ),
         const Divider(height: 32),
         _buildSectionHeader('Account'),
@@ -831,6 +1027,143 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
           ],
         );
       },
+    );
+  }
+}
+
+class EditProfileScreen extends StatefulWidget {
+  final Map<String, dynamic>? userData;
+  final Function(Map<String, dynamic>) onProfileUpdated;
+
+  const EditProfileScreen({super.key, this.userData, required this.onProfileUpdated});
+
+  @override
+  State<EditProfileScreen> createState() => _EditProfileScreenState();
+}
+
+class _EditProfileScreenState extends State<EditProfileScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _fullNameController = TextEditingController();
+
+  final _bioController = TextEditingController();
+  final _locationController = TextEditingController();
+  @override
+  void initState() {
+    super.initState();
+    _fullNameController.text = widget.userData?['full_name'] ?? '';
+    _bioController.text = widget.userData?['bio'] ?? '';
+    _locationController.text = widget.userData?['location'] ?? '';
+  }
+
+  @override
+  void dispose() {
+    _fullNameController.dispose();
+    _bioController.dispose();
+    _locationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _updateProfile() async {
+    if (_formKey.currentState!.validate()) {
+      final fullName = _fullNameController.text.trim();
+      final userId = SupabaseService.currentUser?.id;
+      final bio = _bioController.text.trim();
+      final location = _locationController.text.trim();
+
+      if (userId != null) {
+        try {
+          final updates = {
+            'full_name': fullName,
+            'bio': bio,
+            'location': location,
+          };
+
+          await SupabaseService.updateUserProfile(userId, updates);
+
+          // Optimistically update the local state
+          final updatedUserData = Map<String, dynamic>.from(widget.userData ?? {});
+          updatedUserData['full_name'] = fullName;
+          updatedUserData['bio'] = bio;
+          updatedUserData['location'] = location;
+          widget.onProfileUpdated(updatedUserData);
+
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Profile updated successfully!')),
+          );
+          Navigator.pop(context); // Close the edit screen
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to update profile. Error: ${e.toString()}')),
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Edit Profile'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              TextFormField(
+                controller: _fullNameController,
+                decoration: const InputDecoration(
+                  labelText: 'Full Name',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter your full name';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _bioController,
+                decoration: const InputDecoration(
+                  labelText: 'Bio',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _locationController,
+                decoration: const InputDecoration(
+                  labelText: 'Location',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  return null;
+                },
+              ),
+
+
+
+
+
+
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _updateProfile,
+                child: const Text('Update Profile'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

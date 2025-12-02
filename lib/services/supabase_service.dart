@@ -461,16 +461,16 @@ class SupabaseService {
     try {
       final response = await _supabase
           .from('reports')
-          .select('id, title, assigned_at')
+          .select('id, title, assigned_at, createdAt') // Select createdAt for fallback
           .eq('collector_id', collectorId)
-          .filter('assigned_at', 'is', 'not.null') // Ensure we only get reports that have been assigned
+          .not('collector_id', 'is', null) // Ensure we only get reports that have a collector assigned
           .order('assigned_at', ascending: false);
 
       return response.map((report) {
         return {
           'reportId': report['id'],
           'message': "New report assigned: '${report['title']}'",
-          'timestamp': report['assigned_at'],
+          'timestamp': report['assigned_at'] ?? report['createdAt'], // Fallback to createdAt if assigned_at is null
         };
       }).toList();
     } catch (e, stackTrace) {

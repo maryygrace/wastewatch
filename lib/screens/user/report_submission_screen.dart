@@ -701,7 +701,7 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
                       ),
                     TileLayer(
                       urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.yourcompany.wastewatch',
+                      userAgentPackageName: 'com.example.wastewatch',
                     ),
                     if (_selectedLocation != null)
                       MarkerLayer(

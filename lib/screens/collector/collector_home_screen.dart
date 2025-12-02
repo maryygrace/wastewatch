@@ -61,14 +61,14 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
       final user = SupabaseService.currentUser;
       if (user == null) throw Exception("User not found.");
 
-      // Fetch data in parallel
+      // Fetch all data in parallel, including the complete historical notification list.
       final results = await Future.wait([
         SupabaseService.getUserData(user.id),
         SupabaseService.getCollectorStats(user.id),
         SupabaseService.getCollectorLeaderboard(),
         SupabaseService.getAssignedReportsForMap(user.id),
         SupabaseService.getHistoricalAssignedNotifications(user.id),
-        SupabaseService.getNewAssignedNotifications(user.id),
+        SupabaseService.getNewAssignedNotifications(user.id), // This will now only be used for the badge count and to update the DB.
       ]);
 
       final userData = results[0] as Map<String, dynamic>?;
@@ -77,7 +77,8 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
       final mapData = results[3] as List<Map<String, dynamic>>;
       final historicalNotifications = results[4] as List<Map<String, dynamic>>;
       final newNotifications = results[5] as List<Map<String, dynamic>>;
-      if (mounted) {
+
+      if (mounted) { // Ensure the widget is still mounted before updating state
         setState(() {
           _userData = userData;
           _avatarUrl = userData?['avatar_url'];
@@ -86,14 +87,14 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
           _totalResolved = collectorStats['totalResolved'] ?? 0;
           _leaderboard = leaderboardData;
           _assignedReportsForMap = mapData;
-
+          
+          // Clear the existing list and populate it with the definitive historical data.
           _notifications.clear();
           _notifications.addAll(historicalNotifications);
 
           if (newNotifications.isNotEmpty) {
-            _newNotificationCount = newNotifications.length;
-            // Prepend new notifications so they appear at the top
-            _notifications.insertAll(0, newNotifications);
+            _newNotificationCount = newNotifications.length; // Set badge count
+            _notifications.insertAll(0, newNotifications); // Prepend new notifications to ensure they are visible immediately
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text("You have ${newNotifications.length} new report(s) assigned."),
@@ -412,6 +413,7 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
               children: [
                 TileLayer(
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.example.wastewatch',
                 ),
                 MarkerLayer(markers: markers),
               ],

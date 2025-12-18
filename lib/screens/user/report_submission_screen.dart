@@ -530,7 +530,7 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'AI Analysis: Detected Items 🤖',
+                      'AI Analysis: Detected Items',
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.green),
                     ),
                     const SizedBox(height: 8),

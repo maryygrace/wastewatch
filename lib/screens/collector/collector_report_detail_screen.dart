@@ -1,9 +1,12 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:wastewatch/services/supabase_service.dart';
 import 'package:wastewatch/services/logging_service.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'qr_scanner_screen.dart';
 
 class CollectorReportDetailScreen extends StatefulWidget {
   final String reportId;
@@ -98,6 +101,45 @@ class _CollectorReportDetailScreenState extends State<CollectorReportDetailScree
     }
   }
 
+  Future<void> _resolveReport({String? verificationCode, String? proofImagePath}) async {
+    setState(() {
+      _isUpdating = true;
+    });
+    try {
+      final collectorId = SupabaseService.currentUser!.id;
+      await SupabaseService.resolveReport(reportId: widget.reportId, collectorId: collectorId, verificationCode: verificationCode, proofImagePath: proofImagePath);
+      
+      if (mounted) {
+        setState(() {
+          _currentStatus = 'resolved';
+          _report?['status'] = 'resolved';
+          if (proofImagePath != null) {
+            _report?['proofImagePath'] = proofImagePath;
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Report resolved successfully!'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e, s) {
+      Log.e('Failed to update report status', e, s);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to update status. Please try again.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUpdating = false;
+        });
+      }
+    }
+  }
+
   Future<void> _launchMaps(double lat, double lon) async {
     final uri = Uri.tryParse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
     if (uri != null) {
@@ -114,6 +156,71 @@ class _CollectorReportDetailScreenState extends State<CollectorReportDetailScree
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invalid location data.')));
+      }
+    }
+  }
+
+  Future<void> _callUser(String phoneNumber) async {
+    final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
+    if (await canLaunchUrl(launchUri)) {
+      await launchUrl(launchUri);
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not launch dialer.')));
+      }
+    }
+  }
+
+  void _showResolveOptions() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.qr_code_scanner),
+              title: const Text('Scan QR Code'),
+              subtitle: const Text('User is present'),
+              onTap: () async {
+                Navigator.pop(context);
+                final code = await Navigator.push(context, MaterialPageRoute(builder: (context) => const QrScannerScreen()));
+                if (code != null) {
+                  _resolveReport(verificationCode: code);
+                }
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text('Take Photo Proof'),
+              subtitle: const Text('User is not home'),
+              onTap: () async {
+                Navigator.pop(context);
+                _takeProofPhoto();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _takeProofPhoto() async {
+    final picker = ImagePicker();
+    final XFile? photo = await picker.pickImage(source: ImageSource.camera, imageQuality: 50);
+    
+    if (photo != null) {
+      setState(() => _isUpdating = true);
+      try {
+        final path = 'proofs/${widget.reportId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        await SupabaseService.uploadImageToStorage('report_images', path, File(photo.path));
+        await _resolveReport(proofImagePath: path);
+      } catch (e) {
+        Log.e('Error uploading proof', e);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to upload proof.')));
+        }
+        setState(() => _isUpdating = false);
       }
     }
   }
@@ -153,6 +260,7 @@ class _CollectorReportDetailScreenState extends State<CollectorReportDetailScree
     final location = (report['latitude'] != null && report['longitude'] != null)
         ? LatLng(report['latitude'], report['longitude'])
         : null;
+    final contactNumber = report['contact_number'] as String?;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
@@ -258,6 +366,45 @@ class _CollectorReportDetailScreenState extends State<CollectorReportDetailScree
             ),
             const SizedBox(height: 24),
           ],
+
+          if (contactNumber != null && contactNumber.isNotEmpty) ...[
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _callUser(contactNumber),
+                icon: const Icon(Icons.phone),
+                label: Text('Call User: $contactNumber'),
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+
+          if (report['proofImagePath'] != null) ...[
+            const Text('Proof of Resolution', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            FutureBuilder<String>(
+              future: SupabaseService.getValidImageUrl(report['proofImagePath'] as String),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const SizedBox(height: 200, child: Center(child: CircularProgressIndicator()));
+                }
+                if (snapshot.hasError || !snapshot.hasData) {
+                  return const SizedBox(height: 200, child: Center(child: Icon(Icons.broken_image, color: Colors.grey, size: 40)));
+                }
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    snapshot.data!,
+                    height: 250,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 24),
+          ],
+
           const Text('Update Status', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
           _buildStatusChanger(),
@@ -273,7 +420,19 @@ class _CollectorReportDetailScreenState extends State<CollectorReportDetailScree
       return const Center(child: CircularProgressIndicator());
     }
 
-    final statuses = ['pending', 'in-progress', 'resolved'];
+    if (_currentStatus == 'in-progress') {
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: _showResolveOptions,
+          icon: const Icon(Icons.check_circle_outline),
+          label: const Text('Resolve Report'),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white, padding: const EdgeInsets.all(16)),
+        ),
+      );
+    }
+
+    final statuses = ['pending', 'assigned', 'in-progress', 'resolved'];
     final bool isResolved = _currentStatus == 'resolved';
     
     return DropdownButtonFormField<String>(
@@ -291,6 +450,7 @@ class _CollectorReportDetailScreenState extends State<CollectorReportDetailScree
       }).toList(),
       onChanged: isResolved ? null : (String? newStatus) {
         if (newStatus != null && newStatus != _currentStatus) _showConfirmationDialog(newStatus);
+        // Prevent manual changes via dropdown for now, or implement simple status updates if needed
       }
     );
   }

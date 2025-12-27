@@ -20,7 +20,7 @@ void main() async {
   // Ensure Flutter is initialized
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load environment variables
+  // Load environment variables 
   await dotenv.load(fileName: ".env");
 
   await Supabase.initialize(

@@ -38,6 +38,7 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
   final _formKey = GlobalKey<FormState>();
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
+  final _contactNumberController = TextEditingController();
   final _locationSearchController = TextEditingController();
   final MapController _mapController = MapController();
 
@@ -64,6 +65,7 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
       _populateFieldsForEditing();
     } else {
       _getCurrentLocation();
+      _fetchUserContactInfo();
     }
   }
 
@@ -71,6 +73,7 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
     final report = widget.reportToEdit!;
     _titleController.text = report['title'] ?? '';
     _descriptionController.text = report['description'] ?? '';
+    _contactNumberController.text = report['contact_number'] ?? '';
     _selectedCategories.addAll((report['wasteCategory'] as String?)?.split(',') ?? []);
     if (report['latitude'] != null && report['longitude'] != null) {
       _selectedLocation = LatLng(report['latitude'], report['longitude']);
@@ -101,6 +104,18 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
     
     // Note: We don't load the existing image file here as it would require a network call.
     setState(() => _isLocating = false);
+  }
+
+  Future<void> _fetchUserContactInfo() async {
+    final user = SupabaseService.currentUser;
+    if (user != null) {
+      final userData = await SupabaseService.getUserData(user.id);
+      if (userData != null && userData['phone_number'] != null) {
+        if (mounted) {
+          setState(() => _contactNumberController.text = userData['phone_number']);
+        }
+      }
+    }
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -391,11 +406,12 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
         final updateData = {
           'title': _titleController.text,
           'description': _descriptionController.text.trim(),
-          'wasteCategory': _selectedCategories.join(','),
+          'contact_number': _contactNumberController.text.trim(),
+          'waste_category': _selectedCategories.join(','),
           'latitude': _selectedLocation!.latitude,
           'longitude': _selectedLocation!.longitude,
           'location': _locationSearchController.text.trim(),
-          if (imageUrl != null) 'imageUrl': imageUrl, // Only update image if a new one was picked
+          if (imageUrl != null) 'image_url': imageUrl, // Only update image if a new one was picked
           // Include prediction data if a new image was analyzed (predictionJson != null)
           // or if the old one should be explicitly set to null (not handled here, but optional)
           if (_imageFile != null) 'roboflow_predictions': predictionJson, 
@@ -404,14 +420,15 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
       } else {
         // CREATE logic
         final reportData = {
-          'userId': user.id,
+          'user_id': user.id,
           'title': _titleController.text,
           'description': _descriptionController.text.trim(),
-          'wasteCategory': _selectedCategories.join(','),
+          'contact_number': _contactNumberController.text.trim(),
+          'waste_category': _selectedCategories.join(','),
           'latitude': _selectedLocation!.latitude,
           'longitude': _selectedLocation!.longitude,
           'location': _locationSearchController.text.trim(),
-          'imageUrl': imageUrl,
+          'image_url': imageUrl,
           'status': 'pending',
           // Include prediction data for creation. It should be non-null here due to validation.
           'roboflow_predictions': predictionJson, 
@@ -450,6 +467,7 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
+    _contactNumberController.dispose();
     _locationSearchController.dispose();
     _mapController.dispose();
     super.dispose();
@@ -491,6 +509,19 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
                   filled: true,
                 ),
                 maxLines: 3,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _contactNumberController,
+                decoration: InputDecoration(
+                  labelText: 'Contact Number',
+                  hintText: 'e.g., 09123456789',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  filled: true,
+                  prefixIcon: const Icon(Icons.phone),
+                ),
+                keyboardType: TextInputType.phone,
+                validator: (value) => value!.isEmpty ? 'Please enter a contact number' : null,
               ),
               const SizedBox(height: 16),
 

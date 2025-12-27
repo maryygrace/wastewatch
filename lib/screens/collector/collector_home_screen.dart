@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:location/location.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:wastewatch/services/supabase_service.dart';
@@ -23,6 +25,11 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
   Map<String, dynamic>? _userData;
   bool _isLoading = true;
   String? _errorMessage;
+
+  // For availability and location tracking
+  bool _isAvailable = false;
+  Timer? _locationUpdateTimer;
+  final Location _location = Location();
 
   // Stats
   String _selectedFilter = 'in-progress';
@@ -53,8 +60,16 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
     _loadCollectorData();
   }
 
+  @override
+  void dispose() {
+    _stopLocationUpdates();
+    super.dispose();
+  }
+
   Future<void> _loadCollectorData() async {
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     setState(() => _isLoading = true);
 
     try {
@@ -82,6 +97,7 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
         setState(() {
           _userData = userData;
           _avatarUrl = userData?['avatar_url'];
+          _isAvailable = userData?['is_available'] ?? false;
           _resolvedToday = collectorStats['resolvedToday'] ?? 0;
           _totalAssigned = collectorStats['totalAssigned'] ?? 0;
           _totalResolved = collectorStats['totalResolved'] ?? 0;
@@ -103,6 +119,10 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
             );
           }
         });
+
+        if (_isAvailable) {
+          _startLocationUpdates();
+        }
       }
     } catch (e, stackTrace) {
       Log.e('Error loading collector data', e, stackTrace);
@@ -112,6 +132,81 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _startLocationUpdates() async {
+    if (!mounted) {
+      return;
+    }
+
+    bool serviceEnabled = await _location.serviceEnabled();
+    if (!serviceEnabled) {
+      serviceEnabled = await _location.requestService();
+      if (!serviceEnabled) {
+        Log.w('Location service is disabled.');
+        return;
+      }
+    }
+
+    PermissionStatus permissionGranted = await _location.hasPermission();
+    if (permissionGranted == PermissionStatus.denied) {
+      permissionGranted = await _location.requestPermission();
+      if (permissionGranted != PermissionStatus.granted) {
+        Log.w('Location permission denied.');
+        return;
+      }
+    }
+
+    _locationUpdateTimer?.cancel(); // Cancel any existing timer
+    _locationUpdateTimer = Timer.periodic(const Duration(minutes: 1), (timer) async {
+      try {
+        final user = SupabaseService.currentUser;
+        if (user == null || !mounted || !_isAvailable) {
+          timer.cancel(); // Stop if user logs out, widget is disposed, or goes offline
+          return;
+        }
+        final locationData = await _location.getLocation();
+        if (locationData.latitude != null && locationData.longitude != null) {
+          await SupabaseService.updateUserLocation(user.id, locationData.latitude!, locationData.longitude!);
+          Log.i('Updated collector location.');
+        }
+      } catch (e) {
+        Log.e('Failed to get or update location', e);
+      }
+    });
+  }
+
+  void _stopLocationUpdates() {
+    _locationUpdateTimer?.cancel();
+    _locationUpdateTimer = null;
+    Log.i('Stopped location updates.');
+  }
+
+  Future<void> _toggleAvailability(bool value) async {
+    final user = SupabaseService.currentUser;
+    if (user == null) {
+      return;
+    }
+
+    setState(() => _isAvailable = value); // Optimistic UI update
+
+    try {
+      await SupabaseService.updateCollectorAvailability(user.id, value);
+      if (value) {
+        _startLocationUpdates();
+      } else {
+        _stopLocationUpdates();
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(value ? 'You are now online.' : 'You have gone offline.'), backgroundColor: value ? Colors.green : Colors.orange));
+      }
+    } catch (e) {
+      setState(() => _isAvailable = !value); // Revert on failure
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update status: ${e.toString()}'), backgroundColor: Colors.red));
       }
     }
   }
@@ -147,12 +242,16 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
       setState(() {
         _avatarUrl = publicAvatarUrl;
       });
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Updated profile picture!')),
       );
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
     }
   }
@@ -426,7 +525,9 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
 
   Widget _buildReportsTab() {
     final collectorId = SupabaseService.currentUser?.id;
-    if (collectorId == null) return const Center(child: Text('User not found.'));
+    if (collectorId == null) {
+      return const Center(child: Text('User not found.'));
+    }
 
     Stream<List<Map<String, dynamic>>> stream;
     if (_selectedFilter == 'in-progress') {
@@ -645,6 +746,20 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
         ),
         const SizedBox(height: 16),
         const Divider(),
+
+        _buildSectionHeader('Status'),
+        SwitchListTile(
+          title: const Text('Available for Collections'),
+          subtitle: Text(_isAvailable ? 'You are online and will be assigned new reports.' : 'You are offline and will not receive new jobs.'),
+          value: _isAvailable,
+          onChanged: _toggleAvailability,
+          secondary: Icon(
+            _isAvailable ? Icons.location_on : Icons.location_off,
+            color: _isAvailable ? Colors.green : Colors.grey,
+          ),
+        ),
+        const Divider(height: 32),
+
 
         _buildSectionHeader('Preferences'),
         SwitchListTile(

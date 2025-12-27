@@ -186,9 +186,9 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
       final response = await Supabase.instance.client
           .from('reports')
           .select('id, title')
-          .eq('userId', userId)
+          .eq('user_id', userId)
           .eq('status', 'resolved')
-          .eq('resolutionNotified', false);
+          .eq('resolution_notified', false);
 
       if (response.isEmpty) return [];
 
@@ -208,7 +208,7 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
       // Mark all as notified in a single batch operation
       await Supabase.instance.client
           .from('reports')
-          .update({'resolutionNotified': true}).inFilter('id', reportIdsToUpdate);
+          .update({'resolution_notified': true}).inFilter('id', reportIdsToUpdate);
 
       return newNotifications;
     } catch (e, stackTrace) {

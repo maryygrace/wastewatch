@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:wastewatch/services/supabase_service.dart';
 import 'package:wastewatch/services/logging_service.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -126,6 +127,7 @@ class _UserReportDetailScreenState extends State<UserReportDetailScreen> {
     final location = (report['latitude'] != null && report['longitude'] != null)
         ? LatLng(report['latitude'], report['longitude'])
         : null;
+    final verificationCode = report['verification_code'] as String?;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
@@ -218,6 +220,73 @@ class _UserReportDetailScreenState extends State<UserReportDetailScreen> {
             ),
             const SizedBox(height: 24),
           ],
+
+          // QR Code Section (Only visible when In-Progress)
+          if (report['status'] == 'in-progress' && verificationCode != null) ...[
+            const Divider(height: 32),
+            Center(
+              child: Column(
+                children: [
+                  const Text(
+                    'Collection Verification',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Show this QR code to the collector to verify pickup.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                  const SizedBox(height: 24),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.grey.withValues(alpha: 0.2),
+                          spreadRadius: 2,
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: QrImageView(data: verificationCode, version: QrVersions.auto, size: 200.0),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+
+          if (report['proofImagePath'] != null) ...[
+            const Divider(height: 32),
+            const Text('Proof of Resolution', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            FutureBuilder<String>(
+              future: SupabaseService.getValidImageUrl(report['proofImagePath'] as String),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const SizedBox(height: 200, child: Center(child: CircularProgressIndicator()));
+                }
+                if (snapshot.hasError || !snapshot.hasData) {
+                  return const SizedBox(height: 200, child: Center(child: Icon(Icons.broken_image, color: Colors.grey, size: 40)));
+                }
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    snapshot.data!,
+                    height: 250,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 24),
+          ],
+
           const Divider(height: 32),
           Row(
             children: [

@@ -99,20 +99,23 @@ class SupabaseService {
     return _supabase
         .from('reports')
         .stream(primaryKey: ['id'])
-        .eq('userId', userId)
-        .order('createdAt', ascending: false);
+        .eq('user_id', userId)
+        .order('created_at', ascending: false)
+        .map((data) => data.map((item) => _mapToCamelCase(item)).toList());
   }
 
   /// Get a stream of all assigned (pending or in-progress) reports for collectors.
   static Stream<List<Map<String, dynamic>>> getAssignedReportsStream(String collectorId) {
     return _supabase
         .from('reports')
-        .stream(primaryKey: ['id']).order('assigned_at', ascending: true).map((reports) {
-      // Post-filter the stream on the client-side for multiple conditions.
+        .stream(primaryKey: ['id'])
+        .order('assigned_at', ascending: true)
+        .map((reports) {
       return reports
           .where((report) =>
               report['collector_id'] == collectorId &&
-              report['status'] == 'in-progress')
+              (report['status'] == 'in-progress' || report['status'] == 'assigned'))
+          .map((item) => _mapToCamelCase(item))
           .toList();
     });
   }
@@ -121,18 +124,22 @@ class SupabaseService {
   static Stream<List<Map<String, dynamic>>> getAllReportsStream({String? status}) {
     final query = _supabase.from('reports').stream(primaryKey: ['id']);
     if (status != null) {
-      return query.eq('status', status).order('createdAt', ascending: true);
+      return query.eq('status', status).order('created_at', ascending: true)
+          .map((data) => data.map((item) => _mapToCamelCase(item)).toList());
     }
     return query
-        .order('createdAt', ascending: true);
+        .order('created_at', ascending: true)
+        .map((data) => data.map((item) => _mapToCamelCase(item)).toList());
   }
 
   /// Get a stream of resolved reports for a specific collector.
   static Stream<List<Map<String, dynamic>>> getResolvedReportsByCollectorStream(String collectorId) {
     return _supabase
         .from('reports')
-        .stream(primaryKey: ['id']).eq('status', 'resolved').order('resolved_at', ascending: false).map(
-            (reports) => reports.where((report) => report['resolved_by'] == collectorId).toList());
+        .stream(primaryKey: ['id']).eq('status', 'resolved').order('resolved_at', ascending: false)
+        .map((reports) => reports.where((report) => report['resolved_by'] == collectorId)
+            .map((item) => _mapToCamelCase(item))
+            .toList());
   }
 
   /// Get a single report by ID.
@@ -143,11 +150,20 @@ class SupabaseService {
           .select()
           .eq('id', reportId)
           .single();
-      return response;
+      return _mapToCamelCase(response);
     } catch (e) {
       Log.e('Error getting report: $reportId', e);
       return null;
     }
+  }
+
+  /// Get a stream of a single report for real-time updates (QR code generation, status changes).
+  static Stream<Map<String, dynamic>> getReportStream(String reportId) {
+    return _supabase
+        .from('reports')
+        .stream(primaryKey: ['id'])
+        .eq('id', reportId)
+        .map((event) => _mapToCamelCase(event.single));
   }
 
   /// Get a user's statistics from the 'user_stats' table.
@@ -249,7 +265,7 @@ class SupabaseService {
     try {
       final reports = await _supabase
           .from('reports')
-          .select('status, wasteCategory, location');
+          .select('status, waste_category, location');
 
       int totalReports = reports.length;
       int resolvedReports = reports.where((r) => r['status'] == 'resolved').length;
@@ -265,7 +281,7 @@ class SupabaseService {
       final Map<String, int> locationBreakdown = {};
 
       for (var report in reports) {
-        final categories = (report['wasteCategory'] as String?)?.split(',') ?? [];
+        final categories = (report['waste_category'] as String?)?.split(',') ?? [];
         for (var category in categories) {
           if (wasteBreakdown.containsKey(category)) {
             wasteBreakdown[category] = wasteBreakdown[category]! + 1;
@@ -298,7 +314,7 @@ class SupabaseService {
       final reports = await _supabase
           .from('reports')
           .select('status')
-          .eq('userId', userId);
+          .eq('user_id', userId);
 
       int totalReports = reports.length;
       int resolvedReports =
@@ -316,9 +332,12 @@ class SupabaseService {
   }
 
   /// Create a new report in the 'reports' table.
-  static Future<void> createReport(Map<String, dynamic> reportData) async {
+  static Future<Map<String, dynamic>?> createReport(Map<String, dynamic> reportData) async {
     try {
-      await _supabase.from('reports').insert(reportData);
+      // Use select().single() to return the inserted row, including fields
+      // set by database triggers (like collector_id).
+      final response = await _supabase.from('reports').insert(reportData).select().single();
+      return _mapToCamelCase(response);
     } catch (e) {
       Log.e('Error creating report', e);
       rethrow;
@@ -369,6 +388,56 @@ class SupabaseService {
       }).eq('uid', userId);
 
     } catch (e) { rethrow; }
+  }
+
+  /// Update user location (latitude and longitude).
+  /// This should be called periodically by the Collector app.
+  static Future<void> updateUserLocation(String userId, double latitude, double longitude) async {
+    try {
+      await _supabase.from('users').update({
+        'latitude': latitude,
+        'longitude': longitude,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('uid', userId);
+    } catch (e) {
+      Log.e('Error updating user location for uid: $userId', e);
+      // We do not rethrow here to prevent app crashes on minor location update failures.
+    }
+  }
+
+  /// Update collector availability (Online/Offline).
+  static Future<void> updateCollectorAvailability(String userId, bool isAvailable) async {
+    try {
+      await _supabase.from('users').update({
+        'is_available': isAvailable,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('uid', userId);
+    } catch (e) {
+      Log.e('Error updating availability for uid: $userId', e);
+      rethrow;
+    }
+  }
+
+  /// Resolves a report using either a QR code or photo proof via a Database RPC.
+  static Future<String> resolveReport({
+    required String reportId,
+    required String collectorId,
+    String? verificationCode,
+    String? proofImagePath,
+  }) async {
+    try {
+      final response = await _supabase.rpc('resolve_report', params: {
+        'p_report_id': reportId,
+        'p_collector_id': collectorId,
+        'p_verification_code': verificationCode,
+        'p_proof_image_path': proofImagePath,
+      });
+      
+      return response as String;
+    } catch (e) {
+      Log.e('Error resolving report', e);
+      rethrow;
+    }
   }
 
   /// Get a public image URL from a storage path
@@ -439,7 +508,7 @@ class SupabaseService {
       final response = await _supabase
           .from('reports')
           .select('id, title, resolved_at')
-          .eq('userId', userId)
+          .eq('user_id', userId)
           .eq('status', 'resolved')
           .order('resolved_at', ascending: false);
 
@@ -461,7 +530,7 @@ class SupabaseService {
     try {
       final response = await _supabase
           .from('reports')
-          .select('id, title, assigned_at, createdAt') // Select createdAt for fallback
+          .select('id, title, assigned_at, created_at') // Select createdAt for fallback
           .eq('collector_id', collectorId)
           .not('collector_id', 'is', null) // Ensure we only get reports that have a collector assigned
           .order('assigned_at', ascending: false);
@@ -470,7 +539,7 @@ class SupabaseService {
         return {
           'reportId': report['id'],
           'message': "New report assigned: '${report['title']}'",
-          'timestamp': report['assigned_at'] ?? report['createdAt'], // Fallback to createdAt if assigned_at is null
+          'timestamp': report['assigned_at'] ?? report['created_at'], // Fallback to createdAt if assignedAt is null
         };
       }).toList();
     } catch (e, stackTrace) {
@@ -502,5 +571,22 @@ class SupabaseService {
       Log.e('Error getting new assigned notifications', e, stackTrace);
       return [];
     }
+  }
+
+  static Map<String, dynamic> _mapToCamelCase(Map<String, dynamic> data) {
+    final map = Map<String, dynamic>.from(data);
+    if (map.containsKey('user_id')) map['userId'] = map['user_id'];
+    if (map.containsKey('collector_id')) map['collectorId'] = map['collector_id'];
+    if (map.containsKey('created_at')) map['createdAt'] = map['created_at'];
+    if (map.containsKey('updated_at')) map['updatedAt'] = map['updated_at'];
+    if (map.containsKey('waste_category')) map['wasteCategory'] = map['waste_category'];
+    if (map.containsKey('image_url')) map['imageUrl'] = map['image_url'];
+    if (map.containsKey('resolved_at')) map['resolvedAt'] = map['resolved_at'];
+    if (map.containsKey('resolved_by')) map['resolvedBy'] = map['resolved_by'];
+    if (map.containsKey('assigned_at')) map['assignedAt'] = map['assigned_at'];
+    if (map.containsKey('resolution_notified')) map['resolutionNotified'] = map['resolution_notified'];
+    if (map.containsKey('verification_code')) map['verificationCode'] = map['verification_code'];
+    if (map.containsKey('proof_image_path')) map['proofImagePath'] = map['proof_image_path'];
+    return map;
   }
 }

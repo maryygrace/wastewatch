@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:wastewatch/services/supabase_service.dart';
 import 'package:wastewatch/services/logging_service.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -212,9 +213,18 @@ class _CollectorReportDetailScreenState extends State<CollectorReportDetailScree
     if (photo != null) {
       setState(() => _isUpdating = true);
       try {
-        final path = 'proofs/${widget.reportId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        final now = DateTime.now();
+        // Organize proofs by Year/Month for better file management
+        final path = 'proofs/${now.year}/${now.month}/${widget.reportId}_${now.millisecondsSinceEpoch}.jpg';
+        
         await SupabaseService.uploadImageToStorage('report_images', path, File(photo.path));
         await _resolveReport(proofImagePath: path);
+      } on StorageException catch (e) {
+        Log.e('Storage Error uploading proof', e);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Storage Error: ${e.message}')));
+        }
+        setState(() => _isUpdating = false);
       } catch (e) {
         Log.e('Error uploading proof', e);
         if (mounted) {

@@ -78,7 +78,7 @@ class _SplashScreenState extends State<SplashScreen> {
             ),
             const SizedBox(height: 10),
             Text(
-              'Report Illegal Dumping',
+              'Together for a Greener Future',
               style: GoogleFonts.poppins(
                 fontSize: 16,
                 color: Colors.grey.shade700,

@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:location/location.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:wastewatch/services/supabase_service.dart';
 import 'collector_report_detail_screen.dart';
 import '../../theme_provider.dart';
@@ -235,7 +236,8 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
         throw Exception("User not found. Please log in again.");
       }
       final fileExt = filePath.split('.').last;
-      final fileName = '${user.id}/avatar.$fileExt';
+      // Use timestamp to ensure unique filename and avoid caching issues
+      final fileName = '${user.id}/avatar_${DateTime.now().millisecondsSinceEpoch}.$fileExt';
       await SupabaseService.uploadImageToStorage('avatars', fileName, File(filePath));
       final publicAvatarUrl = SupabaseService.getPublicImageUrl(fileName);
       await SupabaseService.updateUserProfile(user.id, {'avatar_url': publicAvatarUrl});
@@ -247,6 +249,11 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Updated profile picture!')),
+      );
+    } on StorageException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Storage Error: ${e.message}')),
       );
     } catch (error) {
       if (!mounted) {

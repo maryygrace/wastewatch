@@ -17,8 +17,8 @@ class OnboardingModel {
 List<OnboardingModel> onboardingData = [
   OnboardingModel(
     icon: Icons.camera_alt_rounded, // Perfect for "reporting"
-    title: 'Report Illegal Dumping',
-    description: 'Take a picture and report illegally dumped waste quickly and easily.',
+    title: 'Report for a Better Environment',
+    description: 'Snap a photo to help restore the beauty of our community.',
   ),
   OnboardingModel(
     icon: Icons.notifications_active_rounded, // Perfect for "tracking progress"

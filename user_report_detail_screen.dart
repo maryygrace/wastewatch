@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:wastewatch/services/supabase_service.dart';
-import 'package:wastewatch/services/logging_service.dart';
 
 class UserReportDetailScreen extends StatefulWidget {
   final String reportId;

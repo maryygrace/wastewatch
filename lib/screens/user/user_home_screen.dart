@@ -164,7 +164,8 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
         throw Exception("User not found. Please log in again.");
       }
       final fileExt = filePath.split('.').last;
-      final fileName = '${user.id}/avatar.$fileExt';
+      // Use timestamp to ensure unique filename and avoid caching issues
+      final fileName = '${user.id}/avatar_${DateTime.now().millisecondsSinceEpoch}.$fileExt';
       await SupabaseService.uploadImageToStorage('avatars', fileName, File(filePath));
       final publicAvatarUrl = SupabaseService.getPublicImageUrl(fileName);
       await SupabaseService.updateUserProfile(user.id, {'avatar_url': publicAvatarUrl});
@@ -174,6 +175,11 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Updated profile picture!')),
+      );
+    } on StorageException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Storage Error: ${e.message}')),
       );
     } catch (error) {
       if (!mounted) return;

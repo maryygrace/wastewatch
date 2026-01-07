@@ -134,11 +134,13 @@ class _MyAppState extends State<MyApp> {
             colorScheme: ColorScheme.fromSeed(seedColor: Colors.green, brightness: Brightness.light),
             textTheme: GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme),
             useMaterial3: true,
+            appBarTheme: const AppBarTheme(centerTitle: false),
           ),
           darkTheme: ThemeData(
             colorScheme: ColorScheme.fromSeed(seedColor: Colors.green, brightness: Brightness.dark),
             textTheme: GoogleFonts.poppinsTextTheme(Theme.of(context).primaryTextTheme),
             useMaterial3: true,
+            appBarTheme: const AppBarTheme(centerTitle: false),
           ),
           themeMode: themeProvider.themeMode,
           initialRoute: '/',

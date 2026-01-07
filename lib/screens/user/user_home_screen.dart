@@ -257,7 +257,7 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
                 ),
               )
             : Text(_appBarTitles[_selectedIndex]),
-        centerTitle: _selectedIndex == 0,
+        centerTitle: false,
         elevation: 1,
       ),
       body: _buildBody(widgetOptions),

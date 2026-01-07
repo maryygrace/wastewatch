@@ -303,7 +303,7 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
             fontSize: 22,
           ),
         ) : Text(_appBarTitles[_selectedIndex]),
-        centerTitle: _selectedIndex == 0,
+        centerTitle: false,
       ),
       body: IndexedStack(
         index: _selectedIndex,

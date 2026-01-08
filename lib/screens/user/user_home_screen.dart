@@ -28,11 +28,15 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
   // Statistics data
   int _totalReports = 0;
   int _resolvedReports = 0;
+  int _inProgressReports = 0;
+  int _pendingReports = 0;
+  String _currentReportFilter = 'all'; // 'all', 'pending', 'resolved', 'in-progress'
   // Separate state for location breakdown to resolve type mismatch
   Map<String, int> _locationBreakdown = {};
 
   // NEW: Global statistics data
   int _globalTotalReports = 0;
+  int _globalResolvedReports = 0;
   Map<String, int> _globalWasteBreakdown = {
     'plastic': 0,
     'glass': 0,
@@ -112,10 +116,13 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
         // Stats are now calculated directly, ensuring they are always available.
         _totalReports = userStats['totalReports'] ?? 0;
         _resolvedReports = userStats['resolvedReports'] ?? 0;
+        _inProgressReports = userStats['inProgressReports'] ?? 0;
+        _pendingReports = userStats['pendingReports'] ?? 0;
 
         _avatarUrl = userData['avatar_url'];
         // Set global stats
         _globalTotalReports = globalStats['totalReports'] ?? 0;
+        _globalResolvedReports = globalStats['resolvedReports'] ?? 0;
         _globalWasteBreakdown = {
           'plastic': globalStats['plastic'] ?? 0,
           'glass': globalStats['glass'] ?? 0,
@@ -235,6 +242,13 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
     });
   }
 
+  void _navigateToReports({String filter = 'all'}) {
+    setState(() {
+      _currentReportFilter = filter;
+      _selectedIndex = 1; // Switch to Reports tab
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     // Define the widgets for each tab to be used in IndexedStack
@@ -329,9 +343,10 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
                 Expanded(
                   child: _buildStatCard(
                     'Pending',
-                    (_totalReports - _resolvedReports).toString(),
+                    _pendingReports.toString(),
                     Colors.orange,
                     Icons.pending,
+                    onTap: () => _navigateToReports(filter: 'pending'),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -341,6 +356,7 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
                     _resolvedReports.toString(),
                     Colors.green,
                     Icons.check_circle,
+                    onTap: () => _navigateToReports(filter: 'resolved'),
                   ),
                 ),
               ],
@@ -350,10 +366,21 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
               children: [
                 Expanded(
                   child: _buildStatCard(
+                    'In Progress',
+                    _inProgressReports.toString(),
+                    Colors.blue,
+                    Icons.loop,
+                    onTap: () => _navigateToReports(filter: 'in-progress'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _buildStatCard(
                     'Total Reports',
                     _totalReports.toString(),
-                    Colors.blue,
+                    Colors.purple,
                     Icons.description,
+                    onTap: () => _navigateToReports(filter: 'all'),
                   ),
                 ),
               ],
@@ -393,39 +420,43 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
     );
   }
 
-  Widget _buildStatCard(String title, String value, Color color, IconData icon) {
+  Widget _buildStatCard(String title, String value, Color color, IconData icon, {VoidCallback? onTap}) {
     return Card(
       elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, color: color),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey.shade600,
+      clipBehavior: Clip.hardEdge,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: color),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey.shade600,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: color,
+                ],
               ),
-            ),
-          ],
+              const SizedBox(height: 8),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -470,20 +501,66 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Together, we\'ve submitted:',
+              'Together, we\'ve achieved:',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
-            const SizedBox(height: 12),
-            Center(
-              child: Text(
-                '$_globalTotalReports Reports',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Theme.of(context).primaryColor,
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    children: [
+                      Text(
+                        '$_globalResolvedReports',
+                        style: const TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green,
+                        ),
+                      ),
+                      const Text('Resolved', style: TextStyle(color: Colors.grey)),
+                    ],
+                  ),
+                ),
+                Container(
+                  height: 40,
+                  width: 1,
+                  color: Colors.grey.shade300,
+                ),
+                Expanded(
+                  child: Column(
+                    children: [
+                      Text(
+                        '$_globalTotalReports',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                      ),
+                      const Text('Total Reports', style: TextStyle(color: Colors.grey)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (_globalTotalReports > 0) ...[
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: _globalResolvedReports / _globalTotalReports,
+                  minHeight: 8,
+                  backgroundColor: Colors.grey.shade200,
+                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
                 ),
               ),
-            ),
+              const SizedBox(height: 8),
+              Text(
+                'That\'s a ${((_globalResolvedReports / _globalTotalReports) * 100).toStringAsFixed(1)}% resolution rate!',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
+              ),
+            ],
           ],
         ),
       ),
@@ -645,7 +722,7 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
           return const Center(child: CircularProgressIndicator());
         }
 
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+        if (!snapshot.hasData) {
           return const Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -666,19 +743,71 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
           );
         }
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(16.0),
-          itemCount: snapshot.data!.length,
-          itemBuilder: (context, index) {
-            final report = snapshot.data![index];
-            return GestureDetector(
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => UserReportDetailScreen(reportId: report['id'])),
+        var reports = snapshot.data!;
+
+        // Apply filter
+        if (_currentReportFilter != 'all') {
+          reports = reports.where((r) => r['status'] == _currentReportFilter).toList();
+        }
+
+        if (reports.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.filter_list_off, size: 64, color: Colors.grey),
+                const SizedBox(height: 16),
+                Text(
+                  _currentReportFilter == 'all'
+                      ? 'No reports yet'
+                      : 'No ${_currentReportFilter.toUpperCase()} reports found',
+                  style: const TextStyle(fontSize: 18, color: Colors.grey),
+                ),
+                if (_currentReportFilter != 'all')
+                  TextButton(
+                    onPressed: () => setState(() => _currentReportFilter = 'all'),
+                    child: const Text('Show All Reports'),
+                  ),
+              ],
+            ),
+          );
+        }
+
+        return Column(
+          children: [
+            if (_currentReportFilter != 'all')
+              Container(
+                width: double.infinity,
+                color: Colors.grey.shade200,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Showing: ${_currentReportFilter.toUpperCase()}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    TextButton(
+                      onPressed: () => setState(() => _currentReportFilter = 'all'),
+                      child: const Text('Clear Filter'),
+                    ),
+                  ],
+                ),
               ),
-              child: _buildReportCard(report['id'], report),
-            );
-          },
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.all(16.0),
+                itemCount: reports.length,
+                itemBuilder: (context, index) {
+                  final report = reports[index];
+                  return GestureDetector(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => UserReportDetailScreen(reportId: report['id'])),
+                    ),
+                    child: _buildReportCard(report['id'], report),
+                  );
+                },
+              ),
+            ),
+          ],
         );
       },
     );

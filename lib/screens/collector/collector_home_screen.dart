@@ -34,6 +34,7 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
 
   // Stats
   String _selectedFilter = 'in-progress';
+  bool _filterByToday = false;
   int _resolvedToday = 0;
   int _totalAssigned = 0;
   int _totalResolved = 0;
@@ -222,10 +223,11 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
     });
   }
 
-  void _navigateToReportsTab(String filter) {
+  void _navigateToReportsTab(String filter, {bool filterByToday = false}) {
     setState(() {
       _selectedIndex = 1; // Index of the 'Reports' tab
       _selectedFilter = filter;
+      _filterByToday = filterByToday;
     });
   }
 
@@ -364,7 +366,7 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
                 const SizedBox(width: 16),
                 Expanded( // Wrap with GestureDetector to handle tap
                   child: GestureDetector(
-                    onTap: () => _navigateToReportsTab('resolved'),
+                    onTap: () => _navigateToReportsTab('resolved', filterByToday: true),
                     child: _buildStatCard(
                       'Resolved Today',
                       _resolvedToday.toString(),
@@ -378,11 +380,14 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
             const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
-              child: _buildStatCard(
-                'Total Resolved',
-                _totalResolved.toString(),
-                Colors.purple,
-                Icons.history,
+              child: GestureDetector(
+                onTap: () => _navigateToReportsTab('resolved'),
+                child: _buildStatCard(
+                  'Total Resolved',
+                  _totalResolved.toString(),
+                  Colors.purple,
+                  Icons.history,
+                ),
               ),
             ),
             const SizedBox(height: 20),
@@ -568,6 +573,7 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
         onSelectionChanged: (Set<String> newSelection) {
           setState(() {
             _selectedFilter = newSelection.first;
+            _filterByToday = false; // Reset date filter when manually changing tabs
           });
         },
       ),
@@ -581,7 +587,21 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
     if (snapshot.hasError) {
       return Center(child: Text('Error fetching reports: ${snapshot.error}'));
     }
-    if (!snapshot.hasData || snapshot.data!.isEmpty) {
+    
+    var reports = snapshot.data ?? [];
+
+    // Apply date filter if active
+    if (_filterByToday && _selectedFilter == 'resolved') {
+      final now = DateTime.now();
+      reports = reports.where((r) {
+        final resolvedAt = r['resolvedAt'] as String?;
+        if (resolvedAt == null) return false;
+        final date = DateTime.parse(resolvedAt).toLocal();
+        return date.year == now.year && date.month == now.month && date.day == now.day;
+      }).toList();
+    }
+
+    if (reports.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -589,10 +609,17 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
             Icon(_selectedFilter == 'in-progress' ? Icons.task_alt : Icons.history, size: 64, color: Colors.grey),
             const SizedBox(height: 16),
             Text(
-              _selectedFilter == 'in-progress' ? 'No assigned reports.' : 'No resolved reports yet.',
+              _filterByToday 
+                  ? 'No reports resolved today.' 
+                  : (_selectedFilter == 'in-progress' ? 'No assigned reports.' : 'No resolved reports yet.'),
               style: const TextStyle(fontSize: 18, color: Colors.grey),
             ),
-            if (_selectedFilter == 'in-progress')
+            if (_filterByToday)
+              TextButton(
+                onPressed: () => setState(() => _filterByToday = false),
+                child: const Text('Show All Resolved'),
+              ),
+            if (_selectedFilter == 'in-progress' && !_filterByToday)
               const Text(
                 'Great job!',
                 style: TextStyle(color: Colors.grey),
@@ -602,22 +629,43 @@ class _CollectorHomeScreenState extends State<CollectorHomeScreen> {
       );
     }
 
-    final reports = snapshot.data!;
-    return ListView.builder(
-      padding: const EdgeInsets.all(16.0),
-      itemCount: reports.length,
-      itemBuilder: (context, index) {
-        final report = reports[index];
-        return GestureDetector(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => CollectorReportDetailScreen(reportId: report['id'])),
-            );
-          },
-          child: _buildReportCard(report),
-        );
-      },
+    return Column(
+      children: [
+        if (_filterByToday)
+          Container(
+            width: double.infinity,
+            color: Colors.grey.shade200,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Showing: RESOLVED TODAY', style: TextStyle(fontWeight: FontWeight.bold)),
+                TextButton(
+                  onPressed: () => setState(() => _filterByToday = false),
+                  child: const Text('Show All'),
+                ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16.0),
+            itemCount: reports.length,
+            itemBuilder: (context, index) {
+              final report = reports[index];
+              return GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => CollectorReportDetailScreen(reportId: report['id'])),
+                  );
+                },
+                child: _buildReportCard(report),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
   Widget _buildNotificationsTab() {

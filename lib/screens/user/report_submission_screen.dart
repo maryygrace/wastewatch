@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:ui' as ui;
 import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -6,7 +7,7 @@ import 'dart:io';
 import '../../services/supabase_service.dart';
 import '../../services/logging_service.dart';
 import 'package:flutter_map/flutter_map.dart' show FlutterMap, MapController, MapOptions, TileLayer, MarkerLayer, Marker, TapPosition;
-import 'package:latlong2/latlong.dart';
+import 'package:latlong2/latlong.dart' hide Path;
 import 'package:location/location.dart';
 
 // Import the necessary new files
@@ -44,6 +45,8 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
 
   final List<String> _selectedCategories = [];
   File? _imageFile;
+  double? _imageWidth;
+  double? _imageHeight;
   LatLng? _selectedLocation;
   bool _isSubmitting = false; // Used for both report submission and image analysis loading
   bool _isSearching = false;
@@ -129,9 +132,13 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
       
       if (pickedFile != null) {
         final File newImageFile = File(pickedFile.path);
+        final bytes = await newImageFile.readAsBytes();
+        final ui.Image decodedImage = await decodeImageFromList(bytes);
 
         setState(() {
           _imageFile = newImageFile;
+          _imageWidth = decodedImage.width.toDouble();
+          _imageHeight = decodedImage.height.toDouble();
           _isSubmitting = true; // Show loading indicator during analysis
           _roboflowPrediction = null; // Clear previous raw JSON
           _predictions = []; // Clear previous structured predictions
@@ -525,36 +532,6 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
               ),
               const SizedBox(height: 16),
 
-              // ... existing Categories selector ...
-              const Text(
-                'Waste Categories (Select all that apply)',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8.0,
-                runSpacing: 4.0,
-                children: _wasteCategories.map((category) {
-                  final isSelected = _selectedCategories.contains(category);
-                  return FilterChip(
-                    label: Text(category[0].toUpperCase() + category.substring(1)),
-                    selected: isSelected,
-                    onSelected: (selected) {
-                      setState(() {
-                        if (selected) {
-                          _selectedCategories.add(category);
-                        } else {
-                          _selectedCategories.remove(category);
-                        }
-                      });
-                    },
-                    selectedColor: Colors.green.shade100,
-                    checkmarkColor: Colors.green,
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 24),
-              
               // NEW: Image Analysis Results Display
               if (_imageFile != null && hasPredictions)
                 Column(
@@ -644,15 +621,57 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
                       onTap: () => _showImageSourceDialog(),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8.0),
-                        child: Image.file(
-                          _imageFile!,
-                          fit: BoxFit.cover,
-                          height: 200,
-                          width: double.infinity,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Image.file(
+                              _imageFile!,
+                              fit: BoxFit.contain,
+                              width: double.infinity,
+                            ),
+                            if (hasPredictions)
+                              Positioned.fill(
+                                child: CustomPaint(
+                                  painter: BoundingBoxPainter(
+                                    predictions: _predictions,
+                                    imageSize: Size(_imageWidth!, _imageHeight!),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     ),
               
+              const SizedBox(height: 24),
+
+              const Text(
+                'Waste Categories (Select all that apply)',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8.0,
+                runSpacing: 4.0,
+                children: _wasteCategories.map((category) {
+                  final isSelected = _selectedCategories.contains(category);
+                  return FilterChip(
+                    label: Text(category[0].toUpperCase() + category.substring(1)),
+                    selected: isSelected,
+                    onSelected: (selected) {
+                      setState(() {
+                        if (selected) {
+                          _selectedCategories.add(category);
+                        } else {
+                          _selectedCategories.remove(category);
+                        }
+                      });
+                    },
+                    selectedColor: Colors.green.shade100,
+                    checkmarkColor: Colors.green,
+                  );
+                }).toList(),
+              ),
               const SizedBox(height: 24),
 
               // ... existing Location fields and map ...
@@ -821,5 +840,131 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
         ),
       ),
     );
+  }
+}
+
+class BoundingBoxPainter extends CustomPainter {
+  final List<PredictionResult> predictions;
+  final Size imageSize;
+
+  BoundingBoxPainter({
+    required this.predictions,
+    required this.imageSize,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 1. Define the paint for the "dimmed" background
+    final Paint dimPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.6)
+      ..style = PaintingStyle.fill;
+
+    // 2. Define the paint for the box borders
+    final Paint borderPaint = Paint()
+      ..color = Colors.green
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0;
+
+    // 3. Define paint for text background
+    final Paint textBgPaint = Paint()
+      ..color = Colors.green
+      ..style = PaintingStyle.fill;
+
+    // 4. Define text style
+    const TextStyle textStyle = TextStyle(
+      color: Colors.white,
+      fontSize: 12,
+      fontWeight: FontWeight.bold,
+    );
+
+    // Calculate the actual rectangle where the image is displayed within the widget
+    final FittedSizes sizes = applyBoxFit(BoxFit.contain, imageSize, size);
+    final Rect destRect = Alignment.center.inscribe(sizes.destination, Rect.fromLTWH(0, 0, size.width, size.height));
+
+    final double scaleX = destRect.width / imageSize.width;
+    final double scaleY = destRect.height / imageSize.height;
+
+    final Path objectPath = Path();
+    final List<Rect> rects = [];
+
+    for (var prediction in predictions) {
+      // Convert Center-X/Y (Roboflow format) to Top-Left (Flutter format)
+      final double x = prediction.x;
+      final double y = prediction.y;
+      final double w = prediction.width;
+      final double h = prediction.height;
+
+      final double left = (x - w / 2) * scaleX + destRect.left;
+      final double top = (y - h / 2) * scaleY + destRect.top;
+      final double width = w * scaleX;
+      final double height = h * scaleY;
+
+      final Rect rect = Rect.fromLTWH(left, top, width, height);
+      rects.add(rect);
+      objectPath.addRect(rect);
+    }
+
+    // 5. Create background path and combine
+    final Path backgroundPath = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+
+    final Path dimmedOverlay = Path.combine(
+      PathOperation.difference,
+      backgroundPath,
+      objectPath,
+    );
+
+    // 6. Draw the overlay first
+    canvas.drawPath(dimmedOverlay, dimPaint);
+
+    // 7. Draw borders and labels on top
+    for (int i = 0; i < predictions.length; i++) {
+      final Rect rect = rects[i];
+      final PredictionResult prediction = predictions[i];
+
+      // Draw Border
+      canvas.drawRect(rect, borderPaint);
+
+      // Draw Label
+      final String label = '${prediction.objectClass} ${(prediction.confidence * 100).toStringAsFixed(1)}%';
+      final TextSpan textSpan = TextSpan(
+        text: label,
+        style: textStyle,
+      );
+      final TextPainter textPainter = TextPainter(
+        text: textSpan,
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+
+      // Position label above the box
+      double textX = rect.left;
+      double textY = rect.top - textPainter.height - 6;
+
+      // Adjust if out of bounds
+      if (textY < 0) textY = rect.top + 6;
+      if (textX < 0) textX = 0;
+      if (textX + textPainter.width > size.width) textX = size.width - textPainter.width;
+
+      // Draw Label Background
+      final Rect textBgRect = Rect.fromLTWH(
+        textX - 4, 
+        textY - 2, 
+        textPainter.width + 8, 
+        textPainter.height + 4
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(textBgRect, const Radius.circular(4)), 
+        textBgPaint
+      );
+
+      // Draw Label Text
+      textPainter.paint(canvas, Offset(textX, textY));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant BoundingBoxPainter oldDelegate) {
+    return oldDelegate.predictions != predictions || oldDelegate.imageSize != imageSize;
   }
 }

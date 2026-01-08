@@ -319,15 +319,21 @@ class SupabaseService {
       int totalReports = reports.length;
       int resolvedReports =
           reports.where((r) => r['status'] == 'resolved').length;
+      int inProgressReports =
+          reports.where((r) => r['status'] == 'in-progress').length;
+      int pendingReports =
+          reports.where((r) => r['status'] == 'pending').length;
 
       return {
         'totalReports': totalReports,
         'resolvedReports': resolvedReports,
+        'inProgressReports': inProgressReports,
+        'pendingReports': pendingReports,
       };
     } catch (e, stackTrace) {
       Log.e('Error calculating user stats for uid: $userId', e, stackTrace);
       // Return zeroed stats on error to prevent crashing the UI.
-      return {'totalReports': 0, 'resolvedReports': 0};
+      return {'totalReports': 0, 'resolvedReports': 0, 'inProgressReports': 0, 'pendingReports': 0};
     }
   }
 
